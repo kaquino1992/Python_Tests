@@ -1,0 +1,274 @@
+import bisect
+from typing import Any, List, Optional, Tuple, Union, Dict, Generic, TypeVar, cast, NewType
+from py_btrees.disk import DISK, Address
+from py_btrees.btree_node import BTreeNode, KT, VT, get_node
+import math
+
+"""
+----------------------- Starter code for your B-Tree -----------------------
+
+Helpful Tips (You will need these):
+1. Your tree should be composed of BTreeNode objects, where each node has:
+    - the disk block address of its parent node
+    - the disk block addresses of its children nodes (if non-leaf)
+    - the data items inside (if leaf)
+    - a flag indicating whether it is a leaf
+
+------------- THE ONLY DATA STORED IN THE `BTree` OBJECT SHOULD BE THE `M` & `L` VALUES AND THE ADDRESS OF THE ROOT NODE -------------
+-------------              THIS IS BECAUSE THE POINT IS TO STORE THE ENTIRE TREE ON DISK AT ALL TIMES                    -------------
+
+2. Create helper methods:
+    - get a node's parent with DISK.read(parent_address)
+    - get a node's children with DISK.read(child_address)
+    - write a node back to disk with DISK.write(self)
+    - check the health of your tree (makes debugging a piece of cake)
+        - go through the entire tree recursively and check that children point to their parents, etc.
+        - now call this method after every insertion in your testing and you will find out where things are going wrong
+3. Don't fall for these common bugs:
+    - Forgetting to update a node's parent address when its parent splits
+        - Remember that when a node splits, some of its children no longer have the same parent
+    - Forgetting that the leaf and the root are edge cases
+    - FORGETTING TO WRITE BACK TO THE DISK AFTER MODIFYING / CREATING A NODE
+    - Forgetting to test odd / even M values
+    - Forgetting to update the KEYS of a node who just gained a child
+    - Forgetting to redistribute keys or children of a node who just split
+    - Nesting nodes inside of each other instead of using disk addresses to reference them
+        - This may seem to work but will fail our grader's stress tests
+4. USE THE DEBUGGER
+5. USE ASSERT STATEMENTS AS MUCH AS POSSIBLE
+    - e.g. `assert node.parent != None or node == self.root` <- if this fails, something is very wrong
+
+--------------------------- BEST OF LUCK ---------------------------
+"""
+
+# Complete both the find and insert methods to earn full credit
+class BTree:
+    def __init__(self, M: int, L: int):
+        """
+        Initialize a new BTree.
+        You do not need to edit this method, nor should you.
+        """
+        self.root_addr: Address = DISK.new() # Remember, this is the ADDRESS of the root node
+        # DO NOT RENAME THE ROOT MEMBER -- LEAVE IT AS self.root_addr
+        DISK.write(self.root_addr, BTreeNode(self.root_addr, None, None, True))
+        self.M = M # M will fall in the range 2 to 99999
+        self.L = L # L will fall in the range 1 to 99999
+
+    #test
+    def insert_idx_in_parent_check(self, node):
+        if node is None:
+            return
+        node_children = DISK.read(node).children_addrs
+        for idx, child in enumerate(node_children):
+            new_node = DISK.read(child)
+            new_node.index_in_parent = idx
+            DISK.write(child, new_node)
+        self.insert_idx_in_parent_check()
+
+    def insert(self, key: KT, value: VT) -> None:
+        leaf_node_adr = self.find_node(key)
+        if not DISK.read(leaf_node_adr).keys:
+            temp = DISK.read(leaf_node_adr)
+            temp.keys.append(key)
+            temp.data.append(value)
+            DISK.write(leaf_node_adr, temp)
+        else:
+            temp = DISK.read(leaf_node_adr)
+            temp.insert_data(key, value)
+            DISK.write(leaf_node_adr, temp)
+        if len(DISK.read(leaf_node_adr).keys) > self.L:
+            self.split(DISK.read(leaf_node_adr), leaf_node_adr)
+        """
+        Insert the key-value pair into your tree.
+        It will probably be useful to have an internal
+        _find_node() method that searches for the node
+        that should be our parent (or finds the leaf
+        if the key is already present).
+
+        Overwrite old values if the key exists in the BTree.
+
+        Make sure to write back all changes to the disk!
+        """
+        # pass
+
+    def split(self, node, adr):
+        median = math.ceil(self.L / 2)
+        # median = math.ceil(self.M / 2)
+        right_node_adr = DISK.new()
+        right_node = BTreeNode(right_node_adr, None, None, True)
+        # right_node.keys = node.keys[median + 1:]
+        right_node.keys = node.keys[median:]
+        # right_node.data = node.data[median + 1:]
+        right_node.data = node.data[median:]
+        right_node.next = node.next
+        left_node = BTreeNode(node.my_addr, None, None, True)
+        # left_node.keys = node.keys[:median+1]
+        left_node.keys = node.keys[:median]
+        # left_node.data = node.data[:median+1]
+        left_node.data = node.data[:median]
+        left_node.next = right_node.my_addr
+        self.add_to_parent(node, left_node, right_node.keys[0], right_node)
+
+
+
+        # left_node_adr = DISK.new()
+        # # DISK.write(left_node_adr, BTreeNode(left_node_adr, node.parent_addr, None, True))
+        # median = math.ceil(self.M/2) -1
+        # left_node = BTreeNode(left_node_adr, node.my_addr, None, True)
+        # left_node.keys = node.keys[:median+1]
+        # left_node.data = node.data[:median+1]
+        # # left_node.next = adr
+        # DISK.write(left_node_adr, left_node)
+        # # right_node_adr = DISK.new() #might want to move this adr creation to later
+        # right_node = BTreeNode(right_node_adr, node.my_addr, None, True)
+        # right_node.keys = node.keys[median+1:]
+        # right_node.data = node.data[median + 1:]
+        # left_node.next = right_node_adr
+        # right_node.next = node.next
+        # self.add_to_parent(node, left_node, right_node.key[0], right_node)
+
+    def add_to_parent(self, node, left_node, midkey, right_node):
+        if node.my_addr == self.root_addr:
+            self.root_addr = DISK.new()
+            DISK.write(left_node.my_addr, left_node)
+            DISK.write(right_node.my_addr,right_node)
+            new_root_node = BTreeNode(self.root_addr, node.parent_addr, None, False)
+            new_root_node.keys = [midkey]
+            # new_root_node.children_addrs = [left_node.my_addr, right_node.my_addr]
+            new_root_node.insert_child(DISK.read(left_node.my_addr).keys[0], left_node.my_addr)
+            new_root_node.insert_child(DISK.read(right_node.my_addr).keys[0], right_node.my_addr)
+            DISK.write(self.root_addr, new_root_node)
+            left_node.parent_addr = new_root_node.my_addr
+            # left_node.index_in_parent = 0 #might want to do an insert index_in_parent function that inserts
+            test = DISK.read(new_root_node.my_addr)
+            left_node.insert_idx_in_parent(test)
+            # test = DISK.read(new_root_node.my_addr)
+            DISK.write(left_node.my_addr, left_node)
+            # right_node.index_in_parent = 1
+            right_node.parent_addr = new_root_node.my_addr
+            right_node.insert_idx_in_parent(test)
+            DISK.write(right_node.my_addr, right_node)
+            return
+
+
+            # right_node_adr = DISK.new()
+            # DISK.write(right_node_adr, right_node)
+            # new_root_node = BTreeNode(self.root_addr, node.parent_addr, None, False)
+            # new_root_node.keys = [midkey]
+            # new_root_node.children_addrs = [left_node.my_addr, right_node.my_addr]
+            # DISK.write(self.root_addr, new_root_node)
+            # left_node.index_in_parent = 0
+            # right_node.index_in_parent = 1
+            # return
+        else:
+            upnode_adr = node.parent_addr
+            upnode = DISK.read(upnode_adr)
+            idx_in_parent = upnode.find_idx(midkey) #not using the insert data because I dont want data at this nonleaf node
+            # old_upnode_keys = upnode.keys
+            # old_upnode_keys.insert(idx_in_parent, midkey)
+            upnode.keys.insert(idx_in_parent,midkey)
+            # upnode.keys = old_upnode_keys.insert(idx_in_parent, midkey)
+            # upnode.insert_child(left_node.my_addr) #redundant
+            # test = DISK.read(right_node.my_addr).keys[0]
+            DISK.write(right_node.my_addr, right_node)
+            upnode.insert_child(DISK.read(right_node.my_addr).keys[0], right_node.my_addr)
+            DISK.write(upnode_adr, upnode)
+            # upnode.insert_child(test, right_node.my_addr)
+            left_node.parent_addr = upnode.my_addr
+            test = DISK.read(left_node.parent_addr)
+            left_node.insert_idx_in_parent(test)
+            DISK.write(left_node.my_addr, left_node)
+            right_node.parent_addr = upnode.my_addr
+            right_node.insert_idx_in_parent(test)
+            DISK.write(right_node.my_addr, right_node)
+            # n_children = DISK.read(upnode).children_addrs
+            # len_children = len(n_children)
+            # if len_children > self.M:
+            if len(DISK.read(upnode.my_addr).children_addrs) > self.M:
+                parent_right_node_adr = DISK.new()
+                parent_right_node = BTreeNode(parent_right_node_adr, upnode.parent_addr, None, False)
+                # median = math.ceil(self.M / 2) - 1
+                median = math.ceil(self.M / 2) - 1
+                # parent_right_node.keys = upnode.keys[median + 1:]
+                parent_right_node.keys = upnode.keys[median+1:]
+                # parent_right_node.children_addrs = upnode.children_addrs[median+1:]
+                parent_right_node.children_addrs = upnode.children_addrs[median+1:]
+                midpoint = upnode.keys[median]
+                if median == 0:
+                    # upnode.keys = upnode.keys[:median+1]
+                    upnode.keys = upnode.keys[:median+1]
+                else:
+                    # upnode.keys = upnode.keys[:median]
+                    upnode.keys = upnode.keys[:median]
+                # upnode.children_addrs = upnode.children_addrs[:median+1]
+                upnode.children_addrs = upnode.children_addrs[:median+1]
+                DISK.write(parent_right_node.my_addr, parent_right_node)
+                DISK.write(upnode.my_addr, upnode)
+                for child in upnode.children_addrs:
+                    temp = DISK.read(child)
+                    temp.parent_addr = upnode.my_addr
+                    test = DISK.read(upnode.my_addr)
+                    temp.insert_idx_in_parent(test)
+                    DISK.write(child,temp)
+                for child in parent_right_node.children_addrs:
+                    temp = DISK.read(child)
+                    temp.parent_addr = parent_right_node.my_addr
+                    test = DISK.read(parent_right_node.my_addr)
+                    temp.insert_idx_in_parent(test)
+                    DISK.write(child, temp)
+                self.add_to_parent(upnode,upnode, midpoint, parent_right_node)
+
+
+
+        # if self.keys
+
+        """
+        Insert the key-value pair into your tree.
+        It will probably be useful to have an internal
+        _find_node() method that searches for the node
+        that should be our parent (or finds the leaf
+        if the key is already present).
+        Overwrite old values if the key exists in the BTree.
+        Make sure to write back all changes to the disk!
+        """
+        # pass
+    def find_node(self, key):
+        current_node = DISK.read(self.root_addr)
+        while current_node.is_leaf is not True:
+            nodekeys = current_node.keys
+            len_keys = len(nodekeys)
+            for i,j in enumerate(nodekeys):
+                if key == j:
+                    current_node = DISK.read(current_node.children_addrs[i+1])
+                    break
+                if key >j and int(len_keys -i) > 1:
+                    if key < nodekeys[i+1]:
+                        current_node = DISK.read(current_node.children_addrs[i+1])
+                        break
+                    elif key >= nodekeys[i+1]:
+                        continue
+                if key >j and int(len_keys-i) <= 1:
+                    current_node = DISK.read(current_node.children_addrs[i+1])
+                    break
+                if key <j:
+                    current_node = DISK.read(current_node.children_addrs[i])
+                    break
+        return current_node.my_addr
+
+    def find(self, key: KT) -> Optional[VT]:
+        node = DISK.read(self.find_node(key))
+        return node.find_data(key)
+        """
+        Find a key and return the value associated with it.
+        If it is not in the BTree, return None.
+
+        This should be implemented with a logarithmic search
+        in the node.keys array, not a linear search. Look at the
+        BTreeNode.find_idx() method for an example of using
+        the builtin bisect library to search for a number in 
+        a sorted array in logarithmic time.
+        """
+        # pass
+
+    def delete(self, key: KT) -> None:
+        raise NotImplementedError("Karma method delete()")
